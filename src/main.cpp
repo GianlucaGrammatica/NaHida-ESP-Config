@@ -210,8 +210,4 @@ void loop() {
         lastDisplayUpdate = millis();
         updateOLED(mqttClient.connected());
     }
-
-    int val = analogRead(A0);
-    Serial.println(val);
-    delay(1000);
 }
