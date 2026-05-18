@@ -6,16 +6,21 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
+#include <DHT.h>
 #include "config.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define LED_PIN D5
 #define BTN_PIN D6
+#define DHT_PIN D7
+
+#define DHT_TYPE DHT11
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
+DHT dht(DHT_PIN, DHT_TYPE);
 
 // --- STRUCTS ---
 struct PlantConfig {
@@ -144,7 +149,15 @@ void handleButton() {
 }
 
 void readSensors() {
-    // TO-DO Lettura dei sonsori
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
+
+    if (!isnan(h) && !isnan(t)) {
+        currentReadings.humidity = h;
+        currentReadings.temperature = t - 2.0;
+    } else {
+        Serial.println("DHT11: lettura fallita");
+    }
 }
 
 void publishTelemetry() {
@@ -168,6 +181,7 @@ void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
     pinMode(BTN_PIN, INPUT_PULLUP);
+    dht.begin();
 
     display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 
