@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ArduinoSettingsState">
+    <option name="comPort" value="COM20" />
+    <option name="boardTarget" value="esp8266" />
+    <option name="serialPort" value="COM20" />
+    <option name="activeBackend" value="platformio" />
+  </component>
+</project>

@@ -14,8 +14,10 @@
 #define LED_PIN D5
 #define BTN_PIN D6
 #define DHT_PIN D7
-
 #define DHT_TYPE DHT11
+#define SOIL_PIN A0
+#define  SOIL_DRY 880
+#define  SOIL_WET 390
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClientSecure espClient;
@@ -151,6 +153,9 @@ void handleButton() {
 void readSensors() {
     float h = dht.readHumidity();
     float t = dht.readTemperature();
+    int rawSoil = analogRead(SOIL_PIN);
+    float soilPercent = map(rawSoil, SOIL_DRY, SOIL_WET, 0, 100);
+    currentReadings.soilHum = soilPercent;
 
     if (!isnan(h) && !isnan(t)) {
         currentReadings.humidity = h;
@@ -205,4 +210,8 @@ void loop() {
         lastDisplayUpdate = millis();
         updateOLED(mqttClient.connected());
     }
+
+    int val = analogRead(A0);
+    Serial.println(val);
+    delay(1000);
 }
