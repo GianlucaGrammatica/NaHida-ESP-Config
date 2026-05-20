@@ -101,6 +101,8 @@ void updateOLED(bool isOnline) {
 
 void showSplash() {
     display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.clearDisplay();
     display.setTextSize(2);
     display.setCursor(10, 5);
     display.print("NaHida");
@@ -114,7 +116,6 @@ void showSplash() {
 }
 
 void setupWiFi() {
-    showSplash();
     int tentativi = 0;
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     while (WiFi.status() != WL_CONNECTED && tentativi < 20) {
@@ -273,6 +274,8 @@ void setup() {
 
     display.clearDisplay();
     display.display();
+
+    showSplash();
 
     // Inizializzazione DFPlayer
     dfSerial.begin(9600);
