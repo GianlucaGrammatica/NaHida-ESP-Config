@@ -7,22 +7,37 @@
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include <BH1750.h>
+#include <SoftwareSerial.h>
+#include <DFPlayerMini_Fast.h>
 #include "config.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define LED_PIN D5
-#define BTN_PIN D6
+#define LED_PIN D0
+#define BTN_PIN D5
 #define DHT_PIN D7
 #define DHT_TYPE DHT11
 #define SOIL_PIN A0
-#define  SOIL_DRY 880
-#define  SOIL_WET 390
+#define SOIL_DRY 880
+#define SOIL_WET 390
+#define DF_RX D8
+#define DF_TX D6
+
+// Indici mp3 nella cartella /mp3 della SD
+#define SND_AVVIO   1   // 0001.mp3
+#define SND_ACQUA   2   // 0002.mp3
+#define SND_ALERT   3   // 0003.mp3
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 DHT dht(DHT_PIN, DHT_TYPE);
+BH1750 lightMeter;
+SoftwareSerial dfSerial(DF_RX, DF_TX);
+DFPlayerMini_Fast dfPlayer;
+
+bool dfReady = false;
 
 // --- STRUCTS ---
 struct PlantConfig {
@@ -46,8 +61,15 @@ SensorReadings currentReadings;
 unsigned long lastSensorPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastDebounceTime = 0;
+unsigned long lastAlertCheck = 0;
 bool lastButtonState = HIGH;
 
+
+void playSound(int track) {
+    if (dfReady) {
+        dfPlayer.play(track);
+    }
+}
 
 void updateOLED(bool isOnline) {
     display.clearDisplay();
@@ -58,7 +80,6 @@ void updateOLED(bool isOnline) {
     display.setTextSize(1);
     display.setCursor(0, 0);
 
-    // Taglia il nome se è troppo lungo
     String displayName = currentConfig.name.length() > 12 ? currentConfig.name.substring(0, 11) + "." : currentConfig.name;
     display.print(displayName);
     display.setCursor(100, 0);
@@ -72,22 +93,40 @@ void updateOLED(bool isOnline) {
     display.printf("Hum:  %.1f %%\n", currentReadings.humidity);
     display.setCursor(0, 38);
     display.printf("Soil: %.1f %%\n", currentReadings.soilHum);
+    display.setCursor(0, 50);
+    display.printf("Lux:  %.0f\n", currentReadings.luminosity);
 
     display.display();
 }
 
-void setupWiFi() {
+void showSplash() {
     display.clearDisplay();
-    display.setCursor(0, 10);
-    display.println("Connecting WiFi...");
+    display.setTextSize(2);
+    display.setCursor(10, 5);
+    display.print("NaHida");
+    display.setTextSize(1);
+    display.setCursor(20, 28);
+    display.print("Plant Monitor");
+    display.drawLine(0, 38, 128, 38, SSD1306_WHITE);
+    display.setCursor(0, 44);
+    display.print("Connessione WiFi...");
     display.display();
+}
 
+void setupWiFi() {
+    showSplash();
+    int tentativi = 0;
     WiFi.begin(WIFI_SSID, WIFI_PASS);
-    while (WiFi.status() != WL_CONNECTED) {
+    while (WiFi.status() != WL_CONNECTED && tentativi < 20) {
         delay(500);
-        Serial.print(".");
+        tentativi++;
+        display.setCursor(tentativi * 6, 56);
+        display.print(".");
+        display.display();
     }
-    Serial.println("\nWiFi connesso");
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi fallito, continuo offline");
+    }
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -134,16 +173,27 @@ void connectMQTT() {
     }
 }
 
+void showButtonFeedback() {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(20, 20);
+    display.println("Annaffiata!");
+    display.display();
+    delay(600);
+    updateOLED(mqttClient.connected());
+}
+
 void handleButton() {
     bool currentButtonState = digitalRead(BTN_PIN);
 
-    // Controlla se il bottone è appena stato premuto (da HIGH a LOW)
     if (lastButtonState == HIGH && currentButtonState == LOW) {
-
-        // Debounce accetta il click solo se sono passati 200ms dall'ultimo
         if (millis() - lastDebounceTime > 200) {
-            mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), "BUTTON_PRESSED");            Serial.println("Click inviato!");
+            mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), "BUTTON_PRESSED");
+            Serial.println("Click inviato!");
             lastDebounceTime = millis();
+            playSound(SND_ACQUA);
+            showButtonFeedback();
         }
     }
 
@@ -156,6 +206,10 @@ void readSensors() {
     int rawSoil = analogRead(SOIL_PIN);
     float soilPercent = map(rawSoil, SOIL_DRY, SOIL_WET, 0, 100);
     currentReadings.soilHum = soilPercent;
+    float lux = lightMeter.readLightLevel();
+    if (lux >= 0) {
+        currentReadings.luminosity = lux;
+    }
 
     if (!isnan(h) && !isnan(t)) {
         currentReadings.humidity = h;
@@ -166,7 +220,6 @@ void readSensors() {
 }
 
 void publishTelemetry() {
-    // Ogni 60 secondi
     if (millis() - lastSensorPublish > 60000) {
         lastSensorPublish = millis();
 
@@ -178,17 +231,60 @@ void publishTelemetry() {
         payload += "\"luminosity\":" + String(currentReadings.luminosity, 1);
         payload += "}";
 
-        mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), payload.c_str());    }
+        mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), payload.c_str());
+    }
 }
 
+// Controlla se i valori sono fuori range e suona l'alert
+void checkAlerts() {
+    if (millis() - lastAlertCheck < 300000) return;
+    lastAlertCheck = millis();
+
+    // Controlla solo se la config è stata ricevuta
+    if (currentConfig.name == "Waiting...") return;
+
+    bool fuoriRange =
+        currentReadings.temperature < currentConfig.tempMin ||
+        currentReadings.temperature > currentConfig.tempMax ||
+        currentReadings.humidity < currentConfig.humMin ||
+        currentReadings.humidity > currentConfig.humMax ||
+        currentReadings.soilHum < currentConfig.soilHumMin ||
+        currentReadings.soilHum > currentConfig.soilHumMax;
+
+    if (fuoriRange) {
+        Serial.println("Alert: sensore fuori range!");
+        playSound(SND_ALERT);
+    }
+}
 
 void setup() {
     Serial.begin(115200);
+
     pinMode(LED_PIN, OUTPUT);
     pinMode(BTN_PIN, INPUT_PULLUP);
     dht.begin();
 
-    display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+    Wire.begin();
+    lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println("SSD1306 non trovato!");
+        while (true);
+    }
+
+    display.clearDisplay();
+    display.display();
+
+    // Inizializzazione DFPlayer
+    dfSerial.begin(9600);
+    delay(500);
+    if (dfPlayer.begin(dfSerial, false)) {
+        dfReady = true;
+        dfPlayer.volume(15);
+        Serial.println("DFPlayer pronto");
+        playSound(SND_AVVIO);
+    } else {
+        Serial.println("DFPlayer non trovato, continuo senza audio");
+    }
 
     espClient.setInsecure();
     setupWiFi();
@@ -204,8 +300,8 @@ void loop() {
     handleButton();
     readSensors();
     publishTelemetry();
+    checkAlerts();
 
-    // Aggiornamento scehrmo ogni 2 secondi
     if (millis() - lastDisplayUpdate > 2000) {
         lastDisplayUpdate = millis();
         updateOLED(mqttClient.connected());
