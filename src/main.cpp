@@ -8,10 +8,9 @@
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <BH1750.h>
-#include <SoftwareSerial.h>
-#include <DFPlayerMini_Fast.h>
 #include "config.h"
 
+// --- PIN ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define RGB_R D0
@@ -23,25 +22,24 @@
 #define SOIL_PIN A0
 #define SOIL_DRY 880
 #define SOIL_WET 390
-#define DF_RX D8
-#define DF_TX D6
 
-#define SND_AVVIO 1
-#define SND_ACQUA 2
-#define SND_ALERT 3
+// --- AUDIO (non disponibile) ---
+// #include <DFPlayer.h>
+// #define SND_AVVIO 1
+// #define SND_ACQUA 2
+// #define SND_ALERT 3
+// DFPlayer mp3;
+// bool dfReady = false;
+// void playSound(int track) { if (dfReady) mp3.playMP3Folder(track); }
 
+// --- OGGETTI ---
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 DHT dht(DHT_PIN, DHT_TYPE);
 BH1750 lightMeter;
-SoftwareSerial dfSerial(DF_RX, DF_TX);
-DFPlayerMini_Fast dfPlayer;
 
-bool dfReady = false;
-
-unsigned long lastMqttAttempt = 0;
-
+// --- STRUCTS ---
 struct PlantConfig {
     String name = "Waiting...";
     float humMin = 0, humMax = 100;
@@ -59,30 +57,32 @@ struct SensorReadings {
 PlantConfig currentConfig;
 SensorReadings currentReadings;
 
+// --- TIMERS ---
 unsigned long lastSensorPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastDebounceTime = 0;
 unsigned long lastAlertCheck = 0;
+unsigned long lastMqttAttempt = 0;
 unsigned long lastLedBlink = 0;
 bool lastButtonState = HIGH;
 bool ledBlinkState = false;
 
 // --- LED RGB ---
+// Stato: 0=offline(blu), 1=ok(verde), 2=warning(giallo), 3=alert(rosso lampeggiante)
+int ledState = 0;
+
 void setRGB(bool r, bool g, bool b) {
     digitalWrite(RGB_R, r);
     digitalWrite(RGB_G, g);
     digitalWrite(RGB_B, b);
 }
 
-// Stato LED: 0=offline(blu), 1=ok(verde), 2=warning(giallo), 3=alert(rosso lampeggiante)
-int ledState = 0;
-
 void updateLED() {
     switch (ledState) {
-        case 0: setRGB(0, 0, 1); break;                  // Blu = offline
-        case 1: setRGB(0, 1, 0); break;                  // Verde = ok
-        case 2: setRGB(1, 1, 0); break;                  // Giallo = warning
-        case 3:                                           // Rosso lampeggiante = alert
+        case 0: setRGB(0, 0, 1); break;
+        case 1: setRGB(0, 1, 0); break;
+        case 2: setRGB(1, 1, 0); break;
+        case 3:
             if (millis() - lastLedBlink > 500) {
                 lastLedBlink = millis();
                 ledBlinkState = !ledBlinkState;
@@ -93,14 +93,8 @@ void updateLED() {
 }
 
 void computeLedState() {
-    if (!mqttClient.connected()) {
-        ledState = 0;
-        return;
-    }
-    if (currentConfig.name == "Waiting...") {
-        ledState = 1;
-        return;
-    }
+    if (!mqttClient.connected()) { ledState = 0; return; }
+    if (currentConfig.name == "Waiting...") { ledState = 1; return; }
 
     bool critico =
         currentReadings.temperature < currentConfig.tempMin ||
@@ -117,12 +111,7 @@ void computeLedState() {
     else ledState = 1;
 }
 
-// --- RESTO DEL CODICE ---
-
-void playSound(int track) {
-    if (dfReady) dfPlayer.play(track);
-}
-
+// --- DISPLAY ---
 void updateOLED(bool isOnline) {
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
@@ -165,6 +154,7 @@ void showSplash() {
     display.display();
 }
 
+// --- WIFI ---
 void setupWiFi() {
     int tentativi = 0;
     WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -181,6 +171,21 @@ void setupWiFi() {
     }
 }
 
+void checkWiFi() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi caduto, riconnessione...");
+        WiFi.disconnect();
+        WiFi.begin(WIFI_SSID, WIFI_PASS);
+        unsigned long start = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+            delay(500);
+            yield();
+        }
+        Serial.println(WiFi.status() == WL_CONNECTED ? "WiFi riconnesso" : "WiFi fallito");
+    }
+}
+
+// --- MQTT ---
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String message = "";
     for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
@@ -198,24 +203,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             currentConfig.soilHumMin = doc["soil_hum_min"] | 0.0f;
             currentConfig.soilHumMax = doc["soil_hum_max"] | 100.0f;
             updateOLED(mqttClient.connected());
-        }
-    }
-}
-
-void checkWiFi() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi caduto, riconnessione...");
-        WiFi.disconnect();
-        WiFi.begin(WIFI_SSID, WIFI_PASS);
-        unsigned long start = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-            delay(500);
-            yield();
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("WiFi riconnesso");
-        } else {
-            Serial.println("WiFi fallito");
         }
     }
 }
@@ -240,6 +227,7 @@ void connectMQTT() {
     }
 }
 
+// --- BOTTONE ---
 void showButtonFeedback() {
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
@@ -260,13 +248,13 @@ void handleButton() {
             mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), "BUTTON_PRESSED");
             Serial.println("Click inviato!");
             lastDebounceTime = millis();
-            playSound(SND_ACQUA);
             showButtonFeedback();
         }
     }
     lastButtonState = currentButtonState;
 }
 
+// --- SENSORI ---
 void readSensors() {
     float h = dht.readHumidity();
     float t = dht.readTemperature();
@@ -298,6 +286,7 @@ void publishTelemetry() {
     }
 }
 
+// --- ALERT ---
 void checkAlerts() {
     if (millis() - lastAlertCheck < 300000) return;
     lastAlertCheck = millis();
@@ -313,10 +302,11 @@ void checkAlerts() {
 
     if (fuoriRange) {
         Serial.println("Alert: sensore fuori range!");
-        playSound(SND_ALERT);
+        // playSound(SND_ALERT);  // audio disabilitato
     }
 }
 
+// --- SETUP ---
 void setup() {
     Serial.begin(115200);
     delay(100);
@@ -341,18 +331,6 @@ void setup() {
     display.display();
     showSplash();
 
-    dfSerial.begin(9600);
-    delay(500);
-    yield();
-    if (dfPlayer.begin(dfSerial, false)) {
-        dfReady = true;
-        dfPlayer.volume(15);
-        Serial.println("DFPlayer pronto");
-        playSound(SND_AVVIO);
-    } else {
-        Serial.println("DFPlayer non trovato, continuo senza audio");
-    }
-
     espClient.setInsecure();
     setupWiFi();
 
@@ -361,6 +339,7 @@ void setup() {
     mqttClient.setCallback(mqttCallback);
 }
 
+// --- LOOP ---
 void loop() {
     connectMQTT();
     mqttClient.loop();
