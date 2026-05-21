@@ -23,7 +23,7 @@
 #define SOIL_DRY 880
 #define SOIL_WET 390
 
-// --- AUDIO (non disponibile) ---
+// --- AUDIO (non disponibile: moduli MP3-TF-16P cloni incompatibili) ---
 // #include <DFPlayer.h>
 // #define SND_AVVIO 1
 // #define SND_ACQUA 2
@@ -79,16 +79,17 @@ void setRGB(bool r, bool g, bool b) {
 
 void updateLED() {
     switch (ledState) {
-        case 0: setRGB(0, 0, 1); break;
-        case 1: setRGB(0, 1, 0); break;
-        case 2: setRGB(1, 1, 0); break;
-        case 3:
+        case 0: setRGB(false, false, true);  break; // blu = offline
+        case 1: setRGB(false, true,  false); break; // verde = ok
+        case 2: setRGB(true,  true,  false); break; // giallo = warning
+        case 3:                                      // rosso lampeggiante = alert
             if (millis() - lastLedBlink > 500) {
                 lastLedBlink = millis();
                 ledBlinkState = !ledBlinkState;
-                setRGB(ledBlinkState, 0, 0);
+                setRGB(ledBlinkState, false, false);
             }
             break;
+        default: break;
     }
 }
 
@@ -186,13 +187,13 @@ void checkWiFi() {
 }
 
 // --- MQTT ---
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char* topic, const byte* payload, unsigned int length) {
     String message = "";
-    for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
+    for (unsigned int i = 0; i < length; i++) message += static_cast<char>(payload[i]);
     String topicStr = String(topic);
 
     if (topicStr == String("device/") + DEVICE_TOKEN + "/config") {
-        StaticJsonDocument<512> doc;
+        JsonDocument doc;
         DeserializationError err = deserializeJson(doc, message);
         if (!err) {
             currentConfig.name = doc["plant_name"].as<String>();
@@ -235,7 +236,7 @@ void showButtonFeedback() {
     display.setCursor(20, 20);
     display.println("Annaffiata!");
     display.display();
-    setRGB(1, 1, 1);
+    setRGB(true, true, true); // bianco per feedback visivo
     delay(600);
     yield();
     updateOLED(mqttClient.connected());
@@ -259,14 +260,14 @@ void readSensors() {
     float h = dht.readHumidity();
     float t = dht.readTemperature();
     int rawSoil = analogRead(SOIL_PIN);
-    float soilPercent = map(rawSoil, SOIL_DRY, SOIL_WET, 0, 100);
-    currentReadings.soilHum = constrain(soilPercent, 0, 100);
+    float soilPercent = static_cast<float>(map(rawSoil, SOIL_DRY, SOIL_WET, 0, 100));
+    currentReadings.soilHum = constrain(soilPercent, 0.0f, 100.0f);
     float lux = lightMeter.readLightLevel();
     if (lux >= 0) currentReadings.luminosity = lux;
 
     if (!isnan(h) && !isnan(t)) {
         currentReadings.humidity = h;
-        currentReadings.temperature = t - 2.0;
+        currentReadings.temperature = t - 2.0f;
     } else {
         Serial.println("DHT11: lettura fallita");
     }
@@ -316,7 +317,7 @@ void setup() {
     pinMode(RGB_R, OUTPUT);
     pinMode(RGB_G, OUTPUT);
     pinMode(RGB_B, OUTPUT);
-    setRGB(0, 0, 0);
+    setRGB(false, false, false);
     pinMode(BTN_PIN, INPUT_PULLUP);
     dht.begin();
 
@@ -324,7 +325,7 @@ void setup() {
     lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
         Serial.println("SSD1306 non trovato!");
-        while (true);
+        while (true) { yield(); }
     }
 
     display.clearDisplay();
