@@ -8,29 +8,31 @@
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <BH1750.h>
+#include <SoftwareSerial.h>
+#include <DFRobotDFPlayerMini.h>
 #include "config.h"
 
 // --- PIN ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define RGB_R D0
-#define RGB_G D4
-#define RGB_B D3
-#define BTN_PIN D5
+#define LED_PIN D0      // LED singolo: acceso = connesso e online
+#define BTN_PIN D4      // bottone (era D5, spostato per liberare D5 al DFPlayer)
 #define DHT_PIN D7
 #define DHT_TYPE DHT11
 #define SOIL_PIN A0
 #define SOIL_DRY 880
 #define SOIL_WET 390
+#define DF_RX D5        // DFPlayer TX -> ESP RX
+#define DF_TX D6        // ESP TX -> DFPlayer RX (con resistenza 1kΩ)
 
-// --- AUDIO (non disponibile: moduli MP3-TF-16P cloni incompatibili) ---
-// #include <DFPlayer.h>
-// #define SND_AVVIO 1
-// #define SND_ACQUA 2
-// #define SND_ALERT 3
-// DFPlayer mp3;
-// bool dfReady = false;
-// void playSound(int track) { if (dfReady) mp3.playMP3Folder(track); }
+// LED RGB rimosso per liberare pin D3, D4
+// #define RGB_R D0
+// #define RGB_G D4
+// #define RGB_B D3
+
+// --- AUDIO ---
+#define SND_AVVIO 1
+#define SND_ACQUA 1
 
 // --- OGGETTI ---
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -38,6 +40,10 @@ WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 DHT dht(DHT_PIN, DHT_TYPE);
 BH1750 lightMeter;
+SoftwareSerial dfSerial(DF_RX, DF_TX, true); // true = logica invertita per BC547
+DFRobotDFPlayerMini dfPlayer;
+
+bool dfReady = false;
 
 // --- STRUCTS ---
 struct PlantConfig {
@@ -63,53 +69,29 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastDebounceTime = 0;
 unsigned long lastAlertCheck = 0;
 unsigned long lastMqttAttempt = 0;
-unsigned long lastLedBlink = 0;
 bool lastButtonState = HIGH;
-bool ledBlinkState = false;
 
-// --- LED RGB ---
-// Stato: 0=offline(blu), 1=ok(verde), 2=warning(giallo), 3=alert(rosso lampeggiante)
-int ledState = 0;
+// --- LED RGB (rimosso, tenuto commentato per riferimento) ---
+// int ledState = 0;
+// bool ledBlinkState = false;
+// unsigned long lastLedBlink = 0;
+// void setRGB(bool r, bool g, bool b) {
+//     digitalWrite(RGB_R, r);
+//     digitalWrite(RGB_G, g);
+//     digitalWrite(RGB_B, b);
+// }
+// void updateLED() { ... }
+// void computeLedState() { ... }
 
-void setRGB(bool r, bool g, bool b) {
-    digitalWrite(RGB_R, r);
-    digitalWrite(RGB_G, g);
-    digitalWrite(RGB_B, b);
-}
-
+// --- LED SINGOLO ---
 void updateLED() {
-    switch (ledState) {
-        case 0: setRGB(false, false, true);  break; // blu = offline
-        case 1: setRGB(false, true,  false); break; // verde = ok
-        case 2: setRGB(true,  true,  false); break; // giallo = warning
-        case 3:                                      // rosso lampeggiante = alert
-            if (millis() - lastLedBlink > 500) {
-                lastLedBlink = millis();
-                ledBlinkState = !ledBlinkState;
-                setRGB(ledBlinkState, false, false);
-            }
-            break;
-        default: break;
-    }
+    bool online = mqttClient.connected() && currentConfig.name != "Waiting...";
+    digitalWrite(LED_PIN, online ? HIGH : LOW);
 }
 
-void computeLedState() {
-    if (!mqttClient.connected()) { ledState = 0; return; }
-    if (currentConfig.name == "Waiting...") { ledState = 1; return; }
-
-    bool critico =
-        currentReadings.temperature < currentConfig.tempMin ||
-        currentReadings.temperature > currentConfig.tempMax ||
-        currentReadings.humidity < currentConfig.humMin ||
-        currentReadings.humidity > currentConfig.humMax;
-
-    bool warning =
-        currentReadings.soilHum < currentConfig.soilHumMin ||
-        currentReadings.soilHum > currentConfig.soilHumMax;
-
-    if (critico) ledState = 3;
-    else if (warning) ledState = 2;
-    else ledState = 1;
+// --- AUDIO ---
+void playSound(int track) {
+    if (dfReady) dfPlayer.play(track);
 }
 
 // --- DISPLAY ---
@@ -236,7 +218,6 @@ void showButtonFeedback() {
     display.setCursor(20, 20);
     display.println("Annaffiata!");
     display.display();
-    setRGB(true, true, true); // bianco per feedback visivo
     delay(600);
     yield();
     updateOLED(mqttClient.connected());
@@ -249,6 +230,7 @@ void handleButton() {
             mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), "BUTTON_PRESSED");
             Serial.println("Click inviato!");
             lastDebounceTime = millis();
+            playSound(SND_ACQUA);
             showButtonFeedback();
         }
     }
@@ -303,7 +285,6 @@ void checkAlerts() {
 
     if (fuoriRange) {
         Serial.println("Alert: sensore fuori range!");
-        // playSound(SND_ALERT);  // audio disabilitato
     }
 }
 
@@ -314,10 +295,8 @@ void setup() {
     Serial.println("BOOT");
     Serial.println(ESP.getResetReason());
 
-    pinMode(RGB_R, OUTPUT);
-    pinMode(RGB_G, OUTPUT);
-    pinMode(RGB_B, OUTPUT);
-    setRGB(false, false, false);
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
     pinMode(BTN_PIN, INPUT_PULLUP);
     dht.begin();
 
@@ -327,10 +306,22 @@ void setup() {
         Serial.println("SSD1306 non trovato!");
         while (true) { yield(); }
     }
-
     display.clearDisplay();
     display.display();
     showSplash();
+
+    // Inizializzazione DFPlayer
+    dfSerial.begin(9600);
+    delay(1000);
+    if (dfPlayer.begin(dfSerial, false, false)) {
+        dfReady = true;
+        dfPlayer.volume(30);
+        Serial.println("DFPlayer pronto");
+        delay(200);
+        playSound(SND_AVVIO);
+    } else {
+        Serial.println("DFPlayer non trovato, continuo senza audio");
+    }
 
     espClient.setInsecure();
     setupWiFi();
@@ -349,7 +340,6 @@ void loop() {
     readSensors();
     publishTelemetry();
     checkAlerts();
-    computeLedState();
     updateLED();
 
     if (millis() - lastDisplayUpdate > 2000) {
