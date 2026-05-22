@@ -1,0 +1,15 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// WiFi Configuration
+const char* WIFI_SSID = "your_wifi";
+const char* WIFI_PASS = "your_wifi_password";
+
+// HiveMQ Configuration
+const char* MQTT_SERVER = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.s1.eu.hivemq.cloud";
+const char* MQTT_USER   = "mqtt_user";
+const char* MQTT_PASS   = "mqtt_pass";
+const int   MQTT_PORT   = 8883;
+const char* DEVICE_TOKEN = "device_token";
+
+#endif

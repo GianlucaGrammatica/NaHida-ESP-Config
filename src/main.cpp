@@ -16,7 +16,7 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define LED_PIN D0      // LED singolo: acceso = connesso e online
-#define BTN_PIN D4      // bottone (era D5, spostato per liberare D5 al DFPlayer)
+#define BTN_PIN D4      // bottone
 #define DHT_PIN D7
 #define DHT_TYPE DHT11
 #define SOIL_PIN A0
@@ -31,8 +31,21 @@
 // #define RGB_B D3
 
 // --- AUDIO ---
-#define SND_AVVIO 1
-#define SND_ACQUA 1
+// 1  = suono breve interazione (basso volume, probabilmente inutilizzato)
+// 2  = suono interazione standard / annaffiata
+// 3  = suono allerta
+// 4  = suono interazione lungo
+// 5  = suono avvio
+// 6  = musica: Lily & Daisy
+// 7  = musica: City Lights
+// 8  = musica: Dreamy Days
+// 9  = musica: Sunny Symphony
+// 10 = musica: Jazzberry Jam
+#define SND_INTERAZIONE_BREVE 1
+#define SND_ACQUA             2
+#define SND_ALERT             3
+#define SND_INTERAZIONE_LUNGO 4
+#define SND_AVVIO             5
 
 // --- OGGETTI ---
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -285,6 +298,7 @@ void checkAlerts() {
 
     if (fuoriRange) {
         Serial.println("Alert: sensore fuori range!");
+        playSound(SND_ALERT);
     }
 }
 
