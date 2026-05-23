@@ -17,12 +17,12 @@
 #define SCREEN_HEIGHT 64
 #define LED_PIN D0      // LED singolo: acceso = connesso e online
 #define BTN_PIN D4      // bottone
-#define DHT_PIN D7
+#define DHT_PIN D5
 #define DHT_TYPE DHT11
 #define SOIL_PIN A0
 #define SOIL_DRY 880
 #define SOIL_WET 390
-#define DF_RX D5        // DFPlayer TX -> ESP RX
+#define DF_RX D7        // DFPlayer TX -> ESP RX
 #define DF_TX D6        // ESP TX -> DFPlayer RX (con resistenza 1kΩ)
 
 // LED RGB rimosso per liberare pin D3, D4
