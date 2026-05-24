@@ -30,7 +30,7 @@ const char* DEVICE_TOKEN = "token-dispositivo";
 
 > `config.h` è nel `.gitignore`, non pusharlo mai.
 
-### 2. Installa le dipendenze e flasha
+### 2. Flasha
 
 ```bash
 pio run --target upload
@@ -44,14 +44,19 @@ pio run --target upload
 
 | Pin ESP | Uso |
 |---------|-----|
-| D0 | LED stato (acceso = connesso + config ricevuta) |
-| D1 | I2C SCL (OLED + BH1750) |
-| D2 | I2C SDA (OLED + BH1750) |
+| D0 | LED verde (acceso = connesso + config ricevuta + sensori in range) |
+| D3 | LED rosso (acceso = offline o sensore fuori range; logica invertita, LOW = acceso) |
 | D4 | Bottone annaffiatura |
 | D5 | DHT11 (temperatura + umidità aria) |
 | D6 | DFPlayer RX (ESP riceve dal TX del player) |
-| D7 | DFPlayer TX (ESP trasmette verso RX del player) — via transistor BC547 |
+| D7 | DFPlayer TX (ESP trasmette verso RX del player, via transistor BC547) |
+| D1 | I2C SCL (OLED + BH1750) |
+| D2 | I2C SDA (OLED + BH1750) |
 | A0 | Sensore umidità suolo (analogico) |
+
+### LED rosso
+
+Il LED rosso è collegato con resistenza a VCC (pull-up), quindi la logica è invertita: `LOW` = acceso, `HIGH` = spento. Si accende quando il dispositivo è offline oppure quando almeno un sensore è fuori range.
 
 ### Nota sul DFPlayer
 
@@ -73,16 +78,17 @@ Formato FAT32, file nella cartella `mp3`. I file vanno copiati nell'ordine numer
 
 ```
 mp3/
-├── 0001.mp3   suono breve interazione (basso volume, probabilmente inutilizzato)
-├── 0002.mp3   suono interazione standard / annaffiata
-├── 0003.mp3   suono allerta
-├── 0004.mp3   suono interazione lungo
-├── 0005.mp3   suono avvio
+├── 0001.mp3   connessione MQTT riuscita
+├── 0002.mp3   annaffiatura confermata
+├── 0003.mp3   sensore fuori range / errore
+├── 0004.mp3   interazione lunga
+├── 0005.mp3   avvio
 ├── 0006.mp3   musica: Lily & Daisy
 ├── 0007.mp3   musica: City Lights
 ├── 0008.mp3   musica: Dreamy Days
 ├── 0009.mp3   musica: Sunny Symphony
-└── 0010.mp3   musica: Jazzberry Jam
+├── 0010.mp3   musica: Jazzberry Jam
+└── 0011.mp3   disconnessione MQTT
 ```
 
 File mp3: mono, 128kbps, 44100Hz.
@@ -93,13 +99,32 @@ File mp3: mono, 128kbps, 44100Hz.
 
 ## Architettura del codice
 
-Il firmware è tutto in `src/main.cpp`, organizzato in sezioni:
+Il firmware è tutto in `src/main.cpp`, organizzato in sezioni.
 
 ### Structs
 
-`PlantConfig` contiene la configurazione della pianta ricevuta via MQTT (nome, range temperatura, umidità aria, umidità suolo). Viene aggiornata ogni volta che arriva un messaggio sul topic `/config`.
+`PlantConfig` contiene la configurazione della pianta ricevuta via MQTT: nome, range di temperatura, umidità aria, umidità suolo e luminosità. Viene aggiornata ogni volta che arriva un messaggio sul topic `/config` e salvata in EEPROM.
 
-`SensorReadings` contiene le ultime letture dei sensori, aggiornate nel loop ogni ciclo.
+`SensorReadings` contiene le ultime letture dei quattro sensori, aggiornate ogni ciclo del loop.
+
+### EEPROM
+
+La configurazione della pianta viene salvata in EEPROM alla ricezione di ogni messaggio `/config`, così sopravvive ai riavvii. Al boot `loadConfig()` controlla il byte sentinella `0xAB` all'indirizzo 0: se presente carica i valori salvati, altrimenti usa i default.
+
+Layout:
+
+| Indirizzo | Tipo | Campo |
+|-----------|------|-------|
+| 0 | `uint8_t` | magic (`0xAB`) |
+| 1..32 | `char[32]` | nome pianta |
+| 33 | `float` | humMin |
+| 37 | `float` | humMax |
+| 41 | `float` | tempMin |
+| 45 | `float` | tempMax |
+| 49 | `float` | soilHumMin |
+| 53 | `float` | soilHumMax |
+| 57 | `float` | luxMin |
+| 61 | `float` | luxMax |
 
 ### Loop principale
 
@@ -107,53 +132,56 @@ Il loop gira senza `delay` bloccanti (tranne nel feedback del bottone). Ogni fun
 
 | Funzione | Frequenza |
 |----------|-----------|
-| `readSensors()` | ogni ciclo (~centinaia di ms) |
-| `publishTelemetry()` | ogni 60 secondi |
+| `readSensors()` | ogni ciclo |
+| `publishTelemetry()` | ogni 30 secondi *(ridotto per test)* |
 | `checkAlerts()` | ogni 5 minuti |
 | `updateOLED()` | ogni 2 secondi |
 | `updateLED()` | ogni ciclo |
 
 ### MQTT
 
-Il dispositivo si connette a HiveMQ Cloud su TLS porta 8883 con `espClient.setInsecure()` (no verifica certificato).
+Il dispositivo si connette a HiveMQ Cloud su TLS porta 8883 con `espClient.setInsecure()` (nessuna verifica del certificato).
 
 Topic sottoscritti:
 
 | Topic | Contenuto |
 |-------|-----------|
 | `device/{token}` | comandi diretti (non usato attivamente) |
-| `device/{token}/config` | configurazione JSON della pianta |
-| `device/{token}/updates` | aggiornamenti (sottoscritto ma non usato in ricezione) |
+| `device/{token}/config` | configurazione JSON della pianta (retain=true) |
+| `device/{token}/updates` | comandi real-time dal server (TODO: PLAY_MUSIC) |
 
 Topic pubblicati:
 
 | Topic | Contenuto |
 |-------|-----------|
-| `device/{token}/updates` | telemetria JSON ogni 60s + `BUTTON_PRESSED` |
+| `device/{token}/updates` | telemetria JSON ogni 30s + `BUTTON_PRESSED` al click |
 | `device/{token}/status` | `ONLINE` alla connessione |
 
 Payload telemetria:
+
 ```json
 {
   "type": "sensor_data",
   "humidity": 55.3,
   "temperature": 22.1,
   "soil_humidity": 67.0,
-  "luminosity": 212
+  "luminosity": 212.0
 }
 ```
 
 ### Riconnessione MQTT
 
-`connectMQTT()` non è bloccante: riprova ogni 5 secondi senza bloccare il loop. Il WiFi invece non ha riconnessione automatica nel loop (la funzione `checkWiFi()` esiste ma non è chiamata per evitare blocchi).
+`connectMQTT()` non è bloccante: riprova ogni 5 secondi senza fermare il loop. Il WiFi usa `setAutoReconnect(true)` di sistema, senza logica di riconnessione manuale nel loop.
 
 ### Audio
 
-`playSound(track)` chiama `dfPlayer.play(track)` solo se `dfReady` è true. Se il DFPlayer non viene rilevato all'avvio, il sistema continua senza audio senza bloccarsi.
+`playSound(track)` chiama `dfPlayer.play(track)` solo se `dfReady` è true. Se il DFPlayer non viene rilevato all'avvio il sistema continua normalmente senza audio. La traccia 11 (`SND_DISCONNESSO`) non è in sequenza con le altre per lasciare i file 6-10 liberi per la musica di sottofondo.
 
 ### Calibrazione sensore suolo
 
-I valori `SOIL_DRY` (880) e `SOIL_WET` (390) sono la lettura grezza di A0 rispettivamente in aria e in acqua. Vanno ricalibrati se si cambia sensore.
+I valori `SOIL_DRY` (770) e `SOIL_WET` (260) sono la lettura grezza di A0 rispettivamente con il sensore in aria e in acqua. Vanno ricalibrati se si cambia sensore.
+
+La temperatura letta dal DHT11 viene corretta di -2°C (`t - 2.0f`) per compensare il calore generato dall'ESP stesso.
 
 ---
 
