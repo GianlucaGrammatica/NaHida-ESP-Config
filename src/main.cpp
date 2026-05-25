@@ -273,7 +273,15 @@ void mqttCallback(char* topic, const byte* payload, unsigned int length) {
 
     // -- comandi real-time dal server --
     if (topicStr == String("device/") + DEVICE_TOKEN + "/updates") {
-        // TODO: gestire PLAY_MUSIC:<traccia>
+        JsonDocument command;
+        if (!deserializeJson(command, message)) {
+            Serial.println("JSON da comandi arrivato");
+            if (command["command"] == String("PLAY_MUSIC")) {
+                int source = String(command["source"]).toInt();
+                Serial.printf("%s %d", "Play Music with source: ", source);
+                playSound(source);
+            }
+        }
         // Il server invia es. "PLAY_MUSIC:6" per avviare la musica di sottofondo.
         // Estrarre il numero dopo ":" con message.substring(message.indexOf(':') + 1).toInt()
         // e chiamare playSound(trackNumber).

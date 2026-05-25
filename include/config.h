@@ -2,8 +2,8 @@
 #define CONFIG_H
 
 // WiFi Configuration
-const char* WIFI_SSID = "Abcia2WiFi";
-const char* WIFI_PASS = "Abcia2wa";
+const char* WIFI_SSID = "Galaxy A54 di Marco";
+const char* WIFI_PASS = "abdc5234";
 
 // HiveMQ Configuration
 const char* MQTT_SERVER = "eccee1d09425443ea5af8df35c267a1f.s1.eu.hivemq.cloud";
