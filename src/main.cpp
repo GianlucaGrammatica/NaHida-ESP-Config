@@ -444,7 +444,7 @@ void setup() {
     delay(1000);
     if (dfPlayer.begin(dfSerial, false, false)) {
         dfReady = true;
-        dfPlayer.volume(20);
+        dfPlayer.volume(18);
         Serial.println("DFPlayer pronto");
         delay(200);
         playSound(SND_AVVIO);
