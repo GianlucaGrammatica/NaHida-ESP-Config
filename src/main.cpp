@@ -19,15 +19,15 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define LED_PIN     D0  // verde: online e sensori ok
-#define LED_RED_PIN D3  // rosso: offline o fuori range (logica invertita: LOW=acceso, resistenza a VCC)
+#define LED_RED_PIN D3  // rosso: offline o fuori range (logica invertita per d3 LOW-acceso con resistenza a VCC)
 #define BTN_PIN     D4  // bottone annaffiatura
 #define DHT_PIN     D5
 #define DHT_TYPE    DHT11
 #define SOIL_PIN    A0
-#define SOIL_DRY    770  // valore ADC terreno secco
-#define SOIL_WET    260  // valore ADC terreno bagnato
+#define SOIL_DRY    770  // valore terreno secco
+#define SOIL_WET    260  // valore terreno bagnato
 #define DF_RX       D6   // DFPlayer TX -> ESP RX
-#define DF_TX       D7   // ESP TX -> DFPlayer RX (resistenza 1kΩ in serie)
+#define DF_TX       D7   // ESP TX -> DFPlayer RX (resistenza 1kΩ in serie e transistor)
 
 // =============================================================
 // TRACCE AUDIO
@@ -37,14 +37,13 @@
 #define SND_ALERT             3   // sensore fuori range / errore
 #define SND_INTERAZIONE_LUNGO 4   // interazione lunga
 #define SND_AVVIO             5   // suono di avvio al boot
-// 6-10: musica di sottofondo (riprodotta via MQTT, vedi TODO sotto)
 #define SND_DISCONNESSO       11  // disconnessione MQTT
 
 // =============================================================
 // EEPROM
 // =============================================================
 #define EEPROM_SIZE  256
-#define EEPROM_MAGIC 0xAB  // sentinella: se diverso l'EEPROM è vuota
+#define EEPROM_MAGIC 0xAB
 
 // Layout EEPROM:
 // 0        uint8_t  magic
@@ -66,7 +65,7 @@ WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 DHT dht(DHT_PIN, DHT_TYPE);
 BH1750 lightMeter;
-SoftwareSerial dfSerial(DF_RX, DF_TX, true); // true = logica invertita per transistor BC547
+SoftwareSerial dfSerial(DF_RX, DF_TX, true); // true = logica invertita per transistor
 DFRobotDFPlayerMini dfPlayer;
 
 bool dfReady = false;
@@ -104,7 +103,7 @@ bool lastButtonState = HIGH;
 bool wasConnected    = false;
 
 // =============================================================
-// EEPROM: salva e carica la configurazione della pianta
+// EEPROM che salva e carica la configurazione
 // =============================================================
 void saveConfig() {
     EEPROM.begin(EEPROM_SIZE);
@@ -192,7 +191,7 @@ void updateOLED(bool isOnline) {
     display.setTextColor(SSD1306_WHITE);
     display.setTextSize(1);
 
-    // riga 0: nome pianta + stato connessione
+    //nome pianta + stato connessione
     String displayName = currentConfig.name.length() > 12
         ? currentConfig.name.substring(0, 11) + "."
         : currentConfig.name;
@@ -253,7 +252,7 @@ void mqttCallback(char* topic, const byte* payload, unsigned int length) {
     for (unsigned int i = 0; i < length; i++) message += static_cast<char>(payload[i]);
     String topicStr = String(topic);
 
-    // -- config pianta (inviata dal server con retain=true) --
+    // config pianta
     if (topicStr == String("device/") + DEVICE_TOKEN + "/config") {
         JsonDocument doc;
         if (!deserializeJson(doc, message)) {
@@ -271,7 +270,7 @@ void mqttCallback(char* topic, const byte* payload, unsigned int length) {
         }
     }
 
-    // -- comandi real-time dal server --
+    // comandi real-time dal server
     if (topicStr == String("device/") + DEVICE_TOKEN + "/updates") {
         JsonDocument command;
         if (!deserializeJson(command, message)) {
@@ -282,11 +281,6 @@ void mqttCallback(char* topic, const byte* payload, unsigned int length) {
                 playSound(source);
             }
         }
-        // Il server invia es. "PLAY_MUSIC:6" per avviare la musica di sottofondo.
-        // Estrarre il numero dopo ":" con message.substring(message.indexOf(':') + 1).toInt()
-        // e chiamare playSound(trackNumber).
-        // Valutare se usare dfPlayer.playMp3Folder() o dfPlayer.play() a seconda
-        // di come sono organizzati i file sulla SD.
     }
 }
 
@@ -379,13 +373,15 @@ void publishTelemetry() {
     if (millis() - lastSensorPublish < 30000) return;
     lastSensorPublish = millis();
 
-    String payload = "{";
-    payload += "\"type\":\"sensor_data\",";
-    payload += "\"humidity\":"      + String(currentReadings.humidity, 1)    + ",";
-    payload += "\"temperature\":"   + String(currentReadings.temperature, 1) + ",";
-    payload += "\"soil_humidity\":" + String(currentReadings.soilHum, 1)     + ",";
-    payload += "\"luminosity\":"    + String(currentReadings.luminosity, 1);
-    payload += "}";
+    JsonDocument doc;
+    doc["type"]          = "sensor_data";
+    doc["humidity"]      = round(currentReadings.humidity * 10) / 10.0;
+    doc["temperature"]   = round(currentReadings.temperature * 10) / 10.0;
+    doc["soil_humidity"] = round(currentReadings.soilHum * 10) / 10.0;
+    doc["luminosity"]    = round(currentReadings.luminosity * 10) / 10.0;
+
+    String payload;
+    serializeJson(doc, payload);
     mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), payload.c_str());
 }
 
@@ -418,28 +414,35 @@ void checkAlerts() {
 // SETUP
 // =============================================================
 void setup() {
+    // seriale di debug
     Serial.begin(115200);
     delay(100);
     Serial.println("BOOT");
     Serial.println(ESP.getResetReason());
 
+    // setup pin
     pinMode(LED_PIN, OUTPUT);     digitalWrite(LED_PIN, LOW);
     pinMode(LED_RED_PIN, OUTPUT); digitalWrite(LED_RED_PIN, HIGH);
     pinMode(BTN_PIN, INPUT_PULLUP);
-    dht.begin();
 
+    // sensori
+    dht.begin();
     Wire.begin();
     lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        Serial.println("SSD1306 non trovato!");
+        Serial.println("SSD1306 non trovato");
         while (true) { yield(); }
     }
+
+    // display
     display.clearDisplay();
     display.display();
     showSplash();
 
+    // memoria
     loadConfig();
 
+    // DFPlayer
     dfSerial.begin(9600);
     delay(1000);
     if (dfPlayer.begin(dfSerial, false, false)) {
@@ -449,14 +452,16 @@ void setup() {
         delay(200);
         playSound(SND_AVVIO);
     } else {
-        Serial.println("DFPlayer non trovato, continuo senza audio");
+        Serial.println("DFPlayer non trovato");
     }
 
+    // wifi
     espClient.setInsecure();
     WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
     setupWiFi();
 
+    // mqtt
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
     mqttClient.setKeepAlive(60);
     mqttClient.setCallback(mqttCallback);
