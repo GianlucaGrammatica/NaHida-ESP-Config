@@ -28,6 +28,7 @@
 #define SOIL_WET    260  // valore terreno bagnato
 #define DF_RX       D6   // DFPlayer TX -> ESP RX
 #define DF_TX       D7   // ESP TX -> DFPlayer RX (resistenza 1kΩ in serie e transistor)
+#define PUSH_TIMEOUT 10000
 
 // =============================================================
 // TRACCE AUDIO
@@ -370,7 +371,7 @@ void readSensors() {
 }
 
 void publishTelemetry() {
-    if (millis() - lastSensorPublish < 30000) return;
+    if (millis() - lastSensorPublish < PUSH_TIMEOUT) return;
     lastSensorPublish = millis();
 
     JsonDocument doc;
