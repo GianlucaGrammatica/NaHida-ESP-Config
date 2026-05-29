@@ -70,6 +70,7 @@ SoftwareSerial dfSerial(DF_RX, DF_TX, true); // true = logica invertita per tran
 DFRobotDFPlayerMini dfPlayer;
 
 bool dfReady = false;
+unsigned long feedbackUntil = 0;
 
 // =============================================================
 // STRUTTURE DATI
@@ -323,10 +324,7 @@ void showButtonFeedback() {
     }
 
     display.display();
-    delay(600);
-    yield();
-    lastDisplayUpdate = millis();
-    updateOLED(mqttClient.connected());
+    feedbackUntil = millis() + 600;
 }
 
 void handleButton() {
@@ -338,9 +336,11 @@ void handleButton() {
                 mqttClient.publish((String("device/") + DEVICE_TOKEN + "/updates").c_str(), "BUTTON_PRESSED");
                 Serial.println("Click inviato!");
                 playSound(SND_ACQUA);
+                dfSerial.flush();
             } else {
                 Serial.println("Click ignorato: offline");
                 playSound(SND_ALERT);
+                dfSerial.flush();
             }
             showButtonFeedback();
         }
@@ -375,11 +375,11 @@ void publishTelemetry() {
     lastSensorPublish = millis();
 
     JsonDocument doc;
-    doc["type"]          = "sensor_data";
-    doc["humidity"]      = round(currentReadings.humidity * 10) / 10.0;
-    doc["temperature"]   = round(currentReadings.temperature * 10) / 10.0;
+    doc["type"] = "sensor_data";
+    doc["humidity"] = round(currentReadings.humidity * 10) / 10.0;
+    doc["temperature"] = round(currentReadings.temperature * 10) / 10.0;
     doc["soil_humidity"] = round(currentReadings.soilHum * 10) / 10.0;
-    doc["luminosity"]    = round(currentReadings.luminosity * 10) / 10.0;
+    doc["luminosity"] = round(currentReadings.luminosity * 10) / 10.0;
 
     String payload;
     serializeJson(doc, payload);
@@ -481,7 +481,12 @@ void loop() {
     checkAlerts();
     updateLED();
 
-    if (millis() - lastDisplayUpdate > 2000) {
+    if (feedbackUntil == 0 && millis() - lastDisplayUpdate > 2000) {
+        lastDisplayUpdate = millis();
+        updateOLED(mqttClient.connected());
+    }
+    if (feedbackUntil != 0 && millis() > feedbackUntil) {
+        feedbackUntil = 0;
         lastDisplayUpdate = millis();
         updateOLED(mqttClient.connected());
     }
